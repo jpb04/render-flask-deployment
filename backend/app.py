@@ -1,62 +1,50 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import speech_recognition as sr
-import openai
+from flask import Flask, render_template, request, send_from_directory
 import os
-from dotenv import load_dotenv
-import json
-
-load_dotenv()
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
-CORS(app)
 
-# Initialize OpenAI
-openai.api_key = os.getenv('OPENAI_API_KEY')
+# Configurations
+UPLOAD_FOLDER = os.path.join(app.root_path, 'static/uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-@app.route('/api/transcribe', methods=['POST'])
-def transcribe_audio():
-    try:
-        audio_file = request.files['audio']
-        recognizer = sr.Recognizer()
-        
-        with sr.AudioFile(audio_file) as source:
-            audio = recognizer.record(source)
-            text = recognizer.recognize_google(audio)
-            
-            # Use OpenAI to analyze and summarize the text
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a meeting note taker. Analyze the following text and provide: 1. Key points 2. Action items 3. Important decisions 4. Summary"},
-                    {"role": "user", "content": text}
-                ]
-            )
-            
-            analysis = response.choices[0].message.content
-            
-            return jsonify({
-                "transcription": text,
-                "analysis": analysis
-            })
-            
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024  # Limit file size (2MB)
 
-@app.route('/api/save-notes', methods=['POST'])
-def save_notes():
-    try:
-        data = request.json
-        filename = f"meeting_notes_{data.get('timestamp', '')}.json"
-        
-        with open(f"notes/{filename}", 'w') as f:
-            json.dump(data, f, indent=4)
-            
-        return jsonify({"message": "Notes saved successfully", "filename": filename})
-        
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/')
+def home():
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'resume' not in request.files:
+        return {'error': 'No file part'}, 400
+
+    file = request.files['resume']
+    if file.filename == '':
+        return {'error': 'No selected file'}, 400
+
+    if not allowed_file(file.filename):
+        return {'error': 'Invalid file type. Allowed types: pdf, doc, docx'}, 400
+
+    filename = secure_filename(file.filename)
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(file_path)
+
+    return {
+        'message': 'Resume uploaded successfully!',
+        'file_url': f'/uploads/{filename}'
+    }
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 if __name__ == '__main__':
-    os.makedirs('notes', exist_ok=True)
-    app.run(debug=True) 
+    app.run(debug=True, host='0.0.0.0')
